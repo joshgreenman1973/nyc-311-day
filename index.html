@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A day on the 311 line — NYC service-request explorer</title>
+<link rel="preconnect" href="https://unpkg.com">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet-gesture-handling/dist/leaflet-gesture-handling.min.css">
+<style>
+  :root{
+    --bg:#0c0a12; --panel:#161320; --panel2:#110e19; --ink:#ece9f3; --mut:#9d94b4;
+    --line:#241f33; --line2:#332b47; --accent:#a78bfa; --accent2:#7c9cff;
+    --f-noise:#ff6b9d; --f-park:#ffb454; --f-house:#5aa9ff; --f-street:#b07cff; --f-san:#3ad29f;
+    --f-water:#36c5f0; --f-tree:#7dd957; --f-home:#ff8c42; --f-pest:#c9a26b; --f-build:#8f9db0; --f-other:#6b7a8c;
+    --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 18px}
+  a{color:var(--accent2)}
+  h1,h2,h3{font-weight:650;letter-spacing:-.01em;line-height:1.15;margin:0}
+  .mono{font-family:var(--mono)} .mut{color:var(--mut)}
+
+  header.hero{border-bottom:1px solid var(--line);background:
+    radial-gradient(1200px 400px at 75% -120px,rgba(167,139,250,.13),transparent 60%),
+    radial-gradient(900px 360px at 10% -100px,rgba(124,156,255,.10),transparent 60%);}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:9px;margin:30px 0 14px}
+  .kicker .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 rgba(167,139,250,.7);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(167,139,250,.6)}70%{box-shadow:0 0 0 9px rgba(167,139,250,0)}100%{box-shadow:0 0 0 0 rgba(167,139,250,0)}}
+  h1.title{font-size:clamp(28px,5vw,48px);margin-bottom:12px}
+  .sub{font-size:clamp(15px,2.1vw,19px);color:var(--mut);max-width:700px}
+  .xlinks{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}
+  .xlink{display:inline-block;font-size:13px;font-family:var(--mono);color:var(--accent2);text-decoration:none;border:1px solid var(--line2);padding:7px 13px;border-radius:8px}
+  .xlink:hover{border-color:var(--accent2)}
+
+  .controlbar{position:sticky;top:0;z-index:500;background:#0c0a12;border-bottom:1px solid var(--line2);padding:14px 0}
+  .cbrow{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--mut)}
+  select,input[type=date]{background:var(--panel2);color:var(--ink);border:1px solid var(--line2);border-radius:9px;padding:10px 12px;font-size:14px;font-family:var(--sans);min-height:42px}
+  select:focus,input:focus{outline:none;border-color:var(--accent)}
+  select{min-width:280px}
+  .loadbtn{background:var(--accent);color:#160f2a;border:none;border-radius:9px;padding:0 22px;height:42px;font-size:14px;font-weight:650;cursor:pointer}
+  .loadbtn:hover{filter:brightness(1.08)} .loadbtn:disabled{opacity:.5;cursor:wait}
+  .randbtn{background:var(--panel2);color:var(--mut);border:1px solid var(--line2);border-radius:9px;height:42px;padding:0 14px;font-size:13px;cursor:pointer;font-family:var(--mono)}
+  .randbtn:hover{color:var(--ink);border-color:var(--accent)}
+  .cbnote{font-size:11.5px;color:var(--mut);font-family:var(--mono);margin-top:8px}
+
+  .headline{padding:18px 0 0;font-size:14px;color:var(--mut);font-family:var(--mono);display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;scroll-margin-top:170px}
+  .headline b{color:var(--ink)}
+  #status{font-family:var(--mono);font-size:14px;padding:14px 16px;border-radius:10px;margin:18px 0 0;display:none}
+  #status.show{display:block}
+  #status.load{background:#1c1630;border:1px solid #34285a;color:#cdbcf0}
+  #status.err{background:#3a0d14;border:1px solid #5e1822;color:#ff9aa6}
+  #status.ok{background:#16221a;border:1px solid #244a30;color:#a9e5c4}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid #34285a;border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin-top:18px}
+  .stat{background:var(--panel2);padding:18px}
+  .stat .n{font-size:clamp(24px,4vw,38px);font-weight:680;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .stat .l{font-size:12px;color:var(--mut);margin-top:4px}
+  .stat .n.acc{color:var(--accent)}
+
+  #app.dim{opacity:.35;pointer-events:none}
+  section{padding:42px 0;border-bottom:1px solid var(--line)}
+  .sec-h{font-size:13px;font-family:var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  .sec-t{font-size:clamp(21px,3.2vw,28px);margin-bottom:10px}
+  .sec-d{color:var(--mut);max-width:720px;margin-bottom:22px}
+
+  .mapcard{border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:var(--panel)}
+  .map-wrap{position:relative}
+  #map{height:520px;width:100%;background:#0a0810;z-index:1}
+  .leaflet-container{background:#0a0810;font-family:var(--sans)}
+  .leaflet-popup-content-wrapper{background:#110e19;color:var(--ink);border:1px solid var(--line2);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  .leaflet-popup-tip{background:#110e19;border:1px solid var(--line2)}
+  .leaflet-popup-content{margin:12px 14px;font-size:13px;line-height:1.45}
+  .pop-ty{font-weight:650;margin-bottom:6px;font-size:13.5px}
+  .pop-row{display:flex;justify-content:space-between;gap:16px;font-family:var(--mono);font-size:12px;color:var(--mut)}
+  .pop-row b{color:var(--ink);font-weight:600}
+  .mapempty{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:1200;pointer-events:none}
+  .mapempty.show{display:flex}
+  .me-inner{background:rgba(17,14,25,.94);border:1px solid var(--line2);border-radius:12px;padding:18px 22px;text-align:center;max-width:360px;pointer-events:auto;box-shadow:0 14px 44px rgba(0,0,0,.55)}
+  .me-inner h4{font-size:15px;margin:0 0 6px} .me-inner p{font-size:12px;color:var(--mut);margin:0 0 13px;font-family:var(--mono);line-height:1.5}
+  .me-inner button{background:var(--accent);color:#160f2a;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:650;cursor:pointer}
+
+  .controls{padding:14px 14px 16px;border-top:1px solid var(--line)}
+  .timerow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .playbtn{flex:none;width:44px;height:44px;border-radius:50%;border:1px solid var(--line2);background:var(--panel2);color:var(--ink);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:.15s}
+  .playbtn:hover{border-color:var(--accent);color:var(--accent)} .playbtn.on{background:var(--accent);color:#160f2a;border-color:var(--accent)}
+  .clock{font-family:var(--mono);font-size:24px;font-weight:680;font-variant-numeric:tabular-nums;min-width:112px}
+  .clock small{font-size:12px;color:var(--mut);font-weight:500;display:block;letter-spacing:.08em}
+  .slider-wrap{flex:1;min-width:180px}
+  input[type=range]{width:100%;-webkit-appearance:none;height:6px;border-radius:6px;background:#2a2340;outline:none}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;border:3px solid var(--accent);cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.5)}
+  .modes{display:flex;gap:6px;margin-left:auto}
+  .modebtn{font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:7px;border:1px solid var(--line2);background:var(--panel2);color:var(--mut);cursor:pointer}
+  .modebtn.on{background:#241a38;color:var(--ink);border-color:var(--accent)}
+  .legend{display:flex;flex-wrap:wrap;gap:7px;margin-top:16px}
+  .lchip{display:flex;align-items:center;gap:7px;font-size:12px;padding:5px 10px 5px 8px;border-radius:20px;border:1px solid var(--line2);background:var(--panel2);cursor:pointer;user-select:none;transition:.12s}
+  .lchip .sw{width:10px;height:10px;border-radius:50%} .lchip .ct{font-family:var(--mono);color:var(--mut);font-size:11px} .lchip.off{opacity:.32}
+  .hint{font-size:12px;color:var(--mut);margin-top:12px;font-style:italic}
+
+  /* dispatch-log player */
+  .player{border:1px solid var(--line2);border-radius:14px;background:var(--panel);padding:16px}
+  .prow{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .spd{display:flex;gap:4px;align-items:center} .spd .lbl{font-family:var(--mono);font-size:10px;color:var(--mut);text-transform:uppercase;letter-spacing:.08em;margin-right:2px}
+  .spdbtn{font-family:var(--mono);font-size:11px;padding:5px 10px;border-radius:7px;border:1px solid var(--line2);background:var(--panel2);color:var(--mut);cursor:pointer}
+  .spdbtn.on{background:#241a38;color:var(--ink);border-color:var(--accent)}
+  .pclock{font-family:var(--mono);font-size:24px;font-weight:680;min-width:104px;font-variant-numeric:tabular-nums}
+  .pclock small{display:block;font-size:11px;color:var(--mut);font-weight:500}
+  .feed{margin-top:14px;max-height:340px;overflow-y:auto;border-top:1px solid var(--line);padding-top:4px}
+  .fentry{display:grid;grid-template-columns:56px 1fr auto;gap:10px;padding:7px 4px;border-bottom:1px solid var(--line);font-size:13px;align-items:baseline}
+  .fentry .ft{font-family:var(--mono);font-weight:650;color:var(--accent2);font-size:12.5px}
+  .fentry .fr{font-family:var(--mono);color:var(--mut);font-size:11.5px;text-align:right;white-space:nowrap}
+  .fentry.new{animation:fin .7s ease} @keyframes fin{0%{background:rgba(167,139,250,.22)}100%{background:transparent}}
+  .agchip{display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:12px;margin-left:8px;font-weight:650;vertical-align:1px;border:1px solid;color:var(--accent);border-color:var(--accent)}
+  .feed-empty{color:var(--mut);font-style:italic;padding:10px 4px;font-size:13px}
+
+  .bar-row{display:grid;grid-template-columns:210px 1fr 64px;align-items:center;gap:12px;margin:7px 0}
+  .bar-row .nm{font-size:13px;text-align:right;color:var(--ink)}
+  .bar-track{height:22px;background:var(--panel2);border-radius:5px;overflow:hidden;border:1px solid var(--line)}
+  .bar-fill{height:100%;border-radius:5px 0 0 5px;transition:width .7s cubic-bezier(.2,.7,.2,1)}
+  .bar-row .vl{font-family:var(--mono);font-size:12px;color:var(--mut);font-variant-numeric:tabular-nums}
+  .hours{display:flex;align-items:flex-end;gap:3px;height:200px;margin-top:8px}
+  .hbar{flex:1;background:linear-gradient(180deg,var(--accent),#4a3a7a);border-radius:3px 3px 0 0;position:relative;cursor:pointer;min-height:2px;transition:.15s;opacity:.85}
+  .hbar:hover{opacity:1;filter:brightness(1.15)} .hbar.sel{background:linear-gradient(180deg,var(--accent2),#2b4a8c);opacity:1}
+  .hbar .hv{position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:10px;color:var(--mut)}
+  .hlabels{display:flex;gap:3px;margin-top:6px} .hlabels span{flex:1;text-align:center;font-family:var(--mono);font-size:9.5px;color:var(--mut)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+  .subh{font-size:14px;margin-bottom:12px;color:var(--mut);font-family:var(--mono);text-transform:uppercase;letter-spacing:.1em}
+  table.tt{width:100%;border-collapse:collapse;font-size:13px}
+  table.tt th,table.tt td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:right}
+  table.tt th:first-child,table.tt td:first-child{text-align:left}
+  table.tt th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);font-weight:600}
+  table.tt td{font-variant-numeric:tabular-nums} table.tt td.big{font-family:var(--mono);font-weight:600;color:var(--ink)}
+
+  .methodbox{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:22px 24px}
+  .methodbox h3{font-size:15px;margin-bottom:6px} .methodbox ul{margin:0 0 16px;padding-left:18px;color:var(--mut);font-size:14px} .methodbox li{margin:6px 0} .methodbox b{color:var(--ink)}
+  .aibtn{font-family:var(--mono);font-size:11.5px;background:#3a0d14;color:#ff9aa6;border:1px solid #5e1822;padding:8px 14px;border-radius:8px;cursor:pointer}
+  .aipop{display:none;margin-top:14px;background:#1c1630;border:1px solid #34285a;border-radius:12px;padding:20px 22px;color:#cdbcf0;font-size:13.5px}
+  .aipop.show{display:block} .aipop h3{color:#e7ddff;font-size:14px;margin-bottom:8px} .aipop ul{margin:0;padding-left:18px} .aipop li{margin:5px 0}
+  footer{padding:34px 0 60px;color:var(--mut);font-size:12.5px}
+  @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr;gap:30px}.bar-row{grid-template-columns:130px 1fr 54px}#map{height:420px}select{min-width:0;width:100%}.field{flex:1 1 100%}}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker"><span class="dot"></span> Live from NYC Open Data · 311</div>
+    <h1 class="title">A day on the 311 line</h1>
+    <p class="sub">Pick any New York City police precinct and any day, and this pulls every non-emergency 311 service request from that neighborhood that day — noise, parking, heat, potholes, rats — from the city's own records, and rebuilds the map, the timeline and the resolution breakdown. The third of a trio, alongside the police and fire versions.</p>
+    <div class="xlinks">
+      <a class="xlink" href="https://joshgreenman1973.github.io/nyc-precinct-day/">🚓 Police 911 version →</a>
+      <a class="xlink" href="https://joshgreenman1973.github.io/nyc-fire-medical-day/">🚑 Fire &amp; medical version →</a>
+    </div>
+  </div>
+</header>
+
+<div class="controlbar">
+  <div class="wrap">
+    <div class="cbrow">
+      <div class="field"><label for="pct">Precinct</label><select id="pct"></select></div>
+      <div class="field"><label for="date">Date</label><input type="date" id="date" min="2020-01-01" value="2025-12-17"></div>
+      <button class="loadbtn" id="load">Load the day</button>
+      <button class="randbtn" id="rand" title="Random precinct and day">🎲 Surprise me</button>
+    </div>
+    <div class="cbnote">311 is near-real-time. Source: 311 Service Requests, NYC Open Data (erm2-nwe9), clipped to the precinct boundary.</div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="headline" id="headline"></div>
+  <div id="status"></div>
+  <div class="stats" id="stats" style="display:none">
+    <div class="stat"><div class="n" id="s-total">—</div><div class="l">service requests in 24 hours</div></div>
+    <div class="stat"><div class="n acc" id="s-gap">—</div><div class="l">average time between requests</div></div>
+    <div class="stat"><div class="n" id="s-res">—</div><div class="l">median time to close</div></div>
+    <div class="stat"><div class="n" id="s-top">—</div><div class="l" id="s-top-l">top complaint</div></div>
+  </div>
+</div>
+
+<div id="app">
+<section>
+  <div class="wrap">
+    <div class="sec-h">The day, block by block</div>
+    <h2 class="sec-t">Where the requests came from</h2>
+    <p class="sec-d">Each dot is one 311 request, at the location it was reported and colored by what kind of complaint it was. Press play to sweep through the 24 hours, tap the chips to isolate a complaint type, and click any dot for the details.</p>
+    <div class="mapcard">
+      <div class="map-wrap">
+        <div id="map"></div>
+        <div id="mapempty" class="mapempty"><div class="me-inner"><h4>Nothing matches these filters</h4><p id="me-detail"></p><button id="me-clear">Clear filters</button></div></div>
+      </div>
+      <div class="controls">
+        <div class="timerow">
+          <button class="playbtn" id="play" aria-label="Play the day">▶</button>
+          <div class="clock"><span id="clock">All day</span><small id="clocksub" class="mono">—</small></div>
+          <div class="slider-wrap"><input type="range" id="slider" min="0" max="86399" value="86399" step="60"></div>
+          <div class="modes"><button class="modebtn on" id="m-all">Show all</button><button class="modebtn" id="m-flow">Live flow</button></div>
+        </div>
+        <div class="legend" id="legend"></div>
+        <div class="hint">In “Live flow” mode, dots brighten as their request comes in and fade over the following 40 minutes. Clicking an hour below filters the map to that hour.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-h">The day as it happened</div>
+    <h2 class="sec-t">Play the request log</h2>
+    <p class="sec-d">The same day as a readable log: press play to stream every 311 request in the order it came in, with the handling agency and how long it took to close.</p>
+    <div class="player">
+      <div class="prow">
+        <button class="playbtn" id="pplay" aria-label="Play the day">▶</button>
+        <div class="pclock"><span id="pclock">00:00</span><small id="pcount">press play</small></div>
+        <div style="flex:1;min-width:180px"><input type="range" id="pslider" min="0" max="86399" value="0" step="60"></div>
+        <div class="spd"><span class="lbl">Speed</span>
+          <button class="spdbtn" data-spd="0.6">Slow</button>
+          <button class="spdbtn on" data-spd="1.4">Normal</button>
+          <button class="spdbtn" data-spd="4.4">Fast</button>
+        </div>
+      </div>
+      <div class="feed" id="feed"><div class="feed-empty">Press play to start the day at midnight, or drag the slider to any hour…</div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-h">The rhythm of the day</div>
+    <h2 class="sec-t">When the requests came in</h2>
+    <p class="sec-d">311 requests by hour of the day. Click any bar to pin the map to that hour.</p>
+    <div class="hours" id="hours"></div>
+    <div class="hlabels" id="hlabels"></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-h">What people reported</div>
+    <h2 class="sec-t" id="fam-title">The complaint mix</h2>
+    <p class="sec-d">Every distinct 311 complaint type that day, grouped into families. Click a family to isolate it on the map.</p>
+    <div id="fams"></div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-h">Who handles it</div>
+    <h2 class="sec-t">Which agency the city routed it to</h2>
+    <p class="sec-d">311 is one phone number for the whole city; behind it, each request is routed to the agency responsible. Acronyms are spelled out.</p>
+    <div class="grid2">
+      <div><h3 class="subh">By agency</h3><div id="agencies"></div></div>
+      <div><h3 class="subh">Median time to close, by agency</h3><table class="tt"><tbody id="agencyRes"></tbody></table><div class="hint" id="res-note"></div></div>
+    </div>
+  </div>
+</section>
+
+<section style="border-bottom:none">
+  <div class="wrap">
+    <div class="sec-h">Methodology</div>
+    <h2 class="sec-t">How this works — and its limits</h2>
+    <div class="methodbox">
+      <h3>Source &amp; method</h3>
+      <ul>
+        <li><b>Data:</b> <a href="https://data.cityofnewyork.us/Social-Services/311-Service-Requests-from-2020-to-Present/erm2-nwe9">311 Service Requests</a>, NYC Open Data (<span class="mono">erm2-nwe9</span>). Queried live in your browser for the date you pick.</li>
+        <li><b>Clipped to the precinct:</b> 311 records carry no police-precinct field, so each request is clipped to the precinct's official boundary (<span class="mono">y76i-bdw7</span>) by point-in-polygon — a request counts if its coordinates fall inside this precinct. This matches how the police page defines a precinct.</li>
+        <li id="m-current"></li>
+        <li><b>Near-real-time:</b> 311 updates continuously (unlike the six-month-lagged police feed), so you can pick recent days here that have no police counterpart.</li>
+      </ul>
+      <h3>Definitions &amp; caveats</h3>
+      <ul>
+        <li><b>“Time to close”</b> = created to closed timestamp. This is <b>resolution</b>, not emergency response — it can be minutes (a police-handled noise call marked closed on scene) or days (a housing-code repair). Agencies close requests very differently, so compare within an agency, not across.</li>
+        <li><b>Agency codes</b> are the city's; the plain-language name is shown next to each. A few rare codes appear as their raw abbreviation.</li>
+        <li><b>“Families”</b> are this tool's grouping of hundreds of raw complaint types; the raw type is always shown in the request log and dot popups.</li>
+        <li><b>Requests, not incidents.</b> One situation can generate several 311 requests, and a request reflects what a resident reported — not a verified condition.</li>
+      </ul>
+      <button class="aibtn" id="aibtn">⚠ AI caution — read before sharing</button>
+      <div class="aipop" id="aipop">
+        <h3>Made with AI assistance</h3>
+        <ul>
+          <li><b>Verified:</b> every figure is computed in your browser from the raw 311 records returned for your selection — nothing is estimated or cached.</li>
+          <li><b>Verified:</b> agency full names were taken from the city's own agency list, not invented; map points use the city's own coordinates.</li>
+          <li><b>Not independently verified:</b> the accuracy of the underlying 311 records, including how each request was categorized, routed and closed.</li>
+          <li><b>Judgment calls:</b> the complaint “families” grouping is editorial. A single day is a snapshot, not a typical pattern.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+</div>
+
+<footer><div class="wrap">Built from NYC Open Data · 311 Service Requests (erm2-nwe9) · Precinct boundaries (y76i-bdw7) · Map tiles © OpenStreetMap contributors © CARTO. One of a trio with the <a href="https://joshgreenman1973.github.io/nyc-precinct-day/">police</a> and <a href="https://joshgreenman1973.github.io/nyc-fire-medical-day/">fire &amp; medical</a> explorers. · <span class="mono" id="buildstamp">build 1</span></div></footer>
+
+<script>
+const BUILD='1 · 2026-07-01';
+window.addEventListener('error',function(ev){var s=document.getElementById('status');if(s){s.className='show err';s.textContent='⚠ Page error: '+(ev.message||'unknown')+' (line '+(ev.lineno||'?')+').';}});
+window.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('buildstamp');if(b)b.textContent='build '+BUILD;
+  var di=document.getElementById('date'); try{di.max=new Date().toISOString().slice(0,10);}catch(e){di.max='2026-12-31';}});
+</script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-gesture-handling"></script>
+<script>
+const PRECINCTS=[
+ ['Manhattan',[[1,'Financial District / Battery Park'],[5,'Chinatown / Little Italy'],[6,'West Village'],[7,'Lower East Side'],[9,'East Village'],[10,'Chelsea / Hudson Yards'],[13,'Gramercy / Flatiron'],[14,'Midtown South / Times Square'],[17,'Murray Hill / Turtle Bay'],[18,"Midtown North / Hell's Kitchen"],[19,'Upper East Side'],[20,'Upper West Side'],[22,'Central Park'],[23,'East Harlem South'],[24,'Manhattan Valley'],[25,'East Harlem North'],[26,'Morningside Heights'],[28,'Central Harlem South'],[30,'Hamilton Heights'],[32,'Central Harlem North'],[33,'Washington Heights South'],[34,'Washington Heights / Inwood']]],
+ ['Bronx',[[40,'Mott Haven / Melrose'],[41,'Hunts Point'],[42,'Morrisania / Claremont'],[43,'Soundview / Parkchester'],[44,'Highbridge / Concourse'],[45,'Throgs Neck / Co-op City'],[46,'Fordham / University Heights'],[47,'Wakefield / Williamsbridge'],[48,'Belmont / East Tremont'],[49,'Pelham Parkway / Morris Park'],[50,'Riverdale / Kingsbridge'],[52,'Bedford Park / Norwood']]],
+ ['Brooklyn',[[60,'Coney Island'],[61,'Sheepshead Bay / Gravesend'],[62,'Bensonhurst / Bath Beach'],[63,'Flatlands / Mill Basin'],[66,'Borough Park'],[67,'East Flatbush'],[68,'Bay Ridge / Dyker Heights'],[69,'Canarsie'],[70,'Flatbush / Midwood'],[71,'Crown Heights South'],[72,'Sunset Park / Windsor Terrace'],[73,'Brownsville'],[75,'East New York / Cypress Hills'],[76,'Red Hook / Carroll Gardens'],[77,'Prospect Heights / Crown Heights'],[78,'Park Slope'],[79,'Bedford-Stuyvesant South'],[81,'Stuyvesant Heights'],[83,'Bushwick'],[84,'Downtown Brooklyn / Brooklyn Heights'],[88,'Fort Greene / Clinton Hill'],[90,'Williamsburg South'],[94,'Greenpoint']]],
+ ['Queens',[[100,'Rockaway'],[101,'Far Rockaway'],[102,'Richmond Hill / Woodhaven'],[103,'Jamaica'],[104,'Ridgewood / Glendale / Maspeth'],[105,'Queens Village / Rosedale'],[106,'Ozone Park / Howard Beach'],[107,'Fresh Meadows / Briarwood'],[108,'Long Island City / Sunnyside'],[109,'Flushing / College Point'],[110,'Elmhurst / Corona'],[111,'Bayside / Douglaston'],[112,'Forest Hills / Rego Park'],[113,'St. Albans / Springfield Gardens'],[114,'Astoria / Long Island City'],[115,'Jackson Heights / East Elmhurst']]],
+ ['Staten Island',[[120,'St. George / Stapleton'],[121,'Graniteville / Mariners Harbor'],[122,'New Dorp / South Beach'],[123,'Tottenville / Great Kills']]],
+];
+const PCT_NAME={},PCT_BORO={},ALL_CODES=[];
+PRECINCTS.forEach(([boro,list])=>list.forEach(([c,n])=>{PCT_NAME[c]=n;PCT_BORO[c]=boro;ALL_CODES.push(c);}));
+const pctSel=document.getElementById('pct');
+PRECINCTS.forEach(([boro,list])=>{const og=document.createElement('optgroup');og.label=boro;list.forEach(([c,n])=>{const o=document.createElement('option');o.value=c;o.textContent=`${c}th — ${n}`;og.appendChild(o);});pctSel.appendChild(og);});
+pctSel.value='75';
+function ordinal(c){const s=['th','st','nd','rd'],v=c%100;return c+(s[(v-20)%10]||s[v]||s[0]);}
+const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const FAM=[["Noise","--f-noise"],["Parking & vehicles","--f-park"],["Heat, water & housing","--f-house"],["Streets & traffic","--f-street"],["Sanitation & cleanliness","--f-san"],["Water & sewer","--f-water"],["Trees & parks","--f-tree"],["Homeless & social","--f-home"],["Rodents & pests","--f-pest"],["Buildings","--f-build"],["Other","--f-other"]];
+const famColor={}; FAM.forEach(([n,v])=>famColor[n]=cssv(v));
+function familyOf(t){
+  t=(t||'').toUpperCase();
+  if(t.includes('NOISE')) return 'Noise';
+  if(t.includes('PARKING')||t.includes('DRIVEWAY')||t.includes('ABANDONED VEHICLE')||t.includes('DERELICT')||t.includes('VEHICLE')) return 'Parking & vehicles';
+  if(t.includes('HEAT')||t.includes('HOT WATER')||t.includes('PLUMBING')||t.includes('PAINT')||t.includes('PLASTER')||t.includes('DOOR')||t.includes('WINDOW')||t.includes('APPLIANCE')||t.includes('ELECTRIC')||t.includes('FLOOR')||t.includes('UNSANITARY')||t.includes('MOLD')||t.includes('LEAD')||t.includes('GENERAL')) return 'Heat, water & housing';
+  if(t.includes('STREET COND')||t.includes('STREET LIGHT')||t.includes('TRAFFIC')||t.includes('SIGNAL')||t.includes('SIDEWALK')||t.includes('POTHOLE')||t.includes('STREET SIGN')||t.includes('CURB')||t.includes('HIGHWAY')||t.includes('BIKE')||t.includes('BLOCKED')) return 'Streets & traffic';
+  if(t.includes('DIRTY')||t.includes('MISSED COLLECTION')||t.includes('SANITATION')||t.includes('LITTER')||t.includes('GRAFFITI')||t.includes('OVERFLOW')||t.includes('DUMPING')||t.includes('RECYCLING')||t.includes('TRASH')||t.includes('GARBAGE')) return 'Sanitation & cleanliness';
+  if(t.includes('WATER SYSTEM')||t.includes('SEWER')||t.includes('WATER QUALITY')||t.includes('CATCH BASIN')||t.includes('HYDRANT')) return 'Water & sewer';
+  if(t.includes('TREE')||t.includes('PARK')||t.includes('FOREST')) return 'Trees & parks';
+  if(t.includes('HOMELESS')||t.includes('PANHANDL')||t.includes('ENCAMP')) return 'Homeless & social';
+  if(t.includes('RODENT')||t.includes('MOSQUITO')||t.includes('PEST')||t.includes('ANIMAL')) return 'Rodents & pests';
+  if(t.includes('BUILDING')||t.includes('CONSTRUCTION')||t.includes('ELEVATOR')||t.includes('SCAFFOLD')) return 'Buildings';
+  return 'Other';
+}
+const AGENCY={NYPD:'Police Department',HPD:'Housing Preservation & Development',DSNY:'Sanitation',DOT:'Transportation',DEP:'Environmental Protection',DOB:'Buildings',DPR:'Parks & Recreation',DOHMH:'Health & Mental Hygiene',DHS:'Homeless Services',DCWP:'Consumer & Worker Protection',DOF:'Finance',DFTA:'Aging',DOE:'Education',TLC:'Taxi & Limousine',ACS:"Children's Services",EDC:'Economic Development',DCA:'Consumer Affairs',NYCEM:'Emergency Management',DOITT:'Information Technology',DHSCMD:'Homeless Services','3-1-1':'311'};
+function agencyLabel(a){const n=AGENCY[(a||'').toUpperCase()];return n?`${n} (${a})`:a||'—';}
+
+function median(a){if(!a.length)return null;const s=[...a].sort((x,y)=>x-y);const m=Math.floor(s.length/2);return s.length%2?s[m]:(s[m-1]+s[m])/2;}
+function fmtDur(min){if(min==null)return '—';if(min<1)return '<1 min';if(min<60)return min.toFixed(0)+' min';if(min<1440)return (min/60).toFixed(1)+' hr';return (min/1440).toFixed(1)+' days';}
+
+/* point-in-polygon */
+function pointInRing(x,y,r){let inside=false;for(let i=0,j=r.length-1;i<r.length;j=i++){const xi=r[i][0],yi=r[i][1],xj=r[j][0],yj=r[j][1];if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))inside=!inside;}return inside;}
+function pointInPoly(x,y,p){if(!pointInRing(x,y,p[0]))return false;for(let k=1;k<p.length;k++)if(pointInRing(x,y,p[k]))return false;return true;}
+function pointInGeom(x,y,g){if(!g)return true;if(g.type==='Polygon')return pointInPoly(x,y,g.coordinates);if(g.type==='MultiPolygon')return g.coordinates.some(p=>pointInPoly(x,y,p));return false;}
+
+/* map */
+const map=L.map('map',{zoomControl:true,gestureHandling:true}).setView([40.70,-73.92],11);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',subdomains:'abcd',maxZoom:19}).addTo(map);
+let layer=L.layerGroup().addTo(map); let markers=[]; let outlineLayer=null; let precinctGeom=null;
+let reqs=[];
+const state={mode:'all',cursor:86399,activeFam:new Set(FAM.map(f=>f[0])),hour:null};
+const WINDOW=40*60;
+
+const loadBtn=document.getElementById('load'),statusEl=document.getElementById('status');
+function setStatus(kind,html){statusEl.className=kind?('show '+kind):'';statusEl.innerHTML=html;}
+
+async function load(auto){
+  const code=pctSel.value,date=document.getElementById('date').value;
+  if(!date){setStatus('err','Please choose a date.');return;}
+  loadBtn.disabled=true;loadBtn.textContent='Loading…';document.getElementById('app').classList.add('dim');document.getElementById('stats').style.display='none';
+  setStatus('load',`<span class="spin"></span>Querying 311 — ${ordinal(+code)} Precinct, ${date}…`);
+  const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),15000);
+  try{
+    // precinct polygon
+    const pg=await fetch(`https://data.cityofnewyork.us/resource/y76i-bdw7.geojson?$where=precinct=${code}`,{signal:ctrl.signal}).then(r=>r.json());
+    if(!pg.features||!pg.features.length) throw new Error('precinct boundary not found');
+    precinctGeom=pg.features[0].geometry;
+    let minLat=90,maxLat=-90,minLon=180,maxLon=-180;
+    (function scan(cs){cs.forEach(c=>{if(Array.isArray(c[0]))scan(c);else{const lo=c[0],la=c[1];if(la<minLat)minLat=la;if(la>maxLat)maxLat=la;if(lo<minLon)minLon=lo;if(lo>maxLon)maxLon=lo;}});})(precinctGeom.coordinates);
+    const where=`created_date between '${date}T00:00:00' and '${date}T23:59:59' and latitude between ${minLat} and ${maxLat} and longitude between ${minLon} and ${maxLon}`;
+    const url=`https://data.cityofnewyork.us/resource/erm2-nwe9.json?$select=unique_key,created_date,closed_date,complaint_type,descriptor,agency,status,latitude,longitude&$where=${encodeURIComponent(where)}&$limit=20000&$order=created_date`;
+    const raw=await fetch(url,{signal:ctrl.signal}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json();});
+    reqs=raw.filter(r=>r.latitude&&r.longitude&&pointInGeom(+r.longitude,+r.latitude,precinctGeom)).map(r=>{
+      const t=(r.created_date||'').slice(11,19),hh=+t.slice(0,2)||0,mm=+t.slice(3,5)||0,ss=+t.slice(6,8)||0;
+      let res=null; if(r.created_date&&r.closed_date){const d=(new Date(r.closed_date)-new Date(r.created_date))/60000; if(d>=0&&d<60*24*400)res=d;}
+      const ty=r.complaint_type||'—';
+      return {id:r.unique_key,tm:t.slice(0,5),s:hh*3600+mm*60+ss,h:hh,ty,ds:r.descriptor||'',fam:familyOf(ty),ag:r.agency||'',st:r.status||'',res,lat:+r.latitude,lon:+r.longitude};
+    });
+    if(!reqs.length){setStatus('err',`No 311 requests found in the ${ordinal(+code)} Precinct on ${date}. Try another day.`);return;}
+    try{ render(code,date); }catch(re){ setStatus('err','The data loaded but the page failed to draw it: '+re.message); return; }
+    setStatus('ok',`✓ Loaded ${reqs.length} 311 requests — ${ordinal(+code)} Precinct, ${date}. Results below.`);
+    clearTimeout(window.__okT); window.__okT=setTimeout(()=>{if(statusEl.classList.contains('ok'))setStatus('','');},5000);
+    if(!auto) document.getElementById('headline').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){
+    const msg=e.name==='AbortError'?"NYC Open Data didn't respond within 15 seconds — usually a network, VPN or firewall block on your side. Try a different network.":'Could not reach NYC Open Data ('+e.message+'). Try again.';
+    setStatus('err',msg);
+  }finally{clearTimeout(to);loadBtn.disabled=false;loadBtn.textContent='Load the day';document.getElementById('app').classList.remove('dim');}
+}
+
+function render(code,date){
+  const name=PCT_NAME[code]||('Precinct '+code),boro=PCT_BORO[code]||'';
+  const dStr=new Date(date+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});
+  document.getElementById('headline').innerHTML=`<span><b>${ordinal(+code)} Precinct</b> · ${name} (${boro})</span><span><b>${dStr}</b></span><span><b>${reqs.length}</b> 311 requests</span>`;
+  document.getElementById('m-current').innerHTML=`<b>Your selection:</b> 311 requests in the ${ordinal(+code)} Precinct (${name}, ${boro}), ${dStr} — ${reqs.length} requests, ${reqs.filter(r=>r.res!=null).length} closed within the dataset.`;
+  const resAll=reqs.filter(r=>r.res!=null).map(r=>r.res);
+  const famC={}; reqs.forEach(r=>famC[r.fam]=(famC[r.fam]||0)+1);
+  const topFam=Object.entries(famC).sort((a,b)=>b[1]-a[1])[0];
+  document.getElementById('stats').style.display='';
+  document.getElementById('s-total').textContent=reqs.length;
+  document.getElementById('s-gap').textContent='1 / '+(24*60/reqs.length).toFixed(1)+' min';
+  document.getElementById('s-res').textContent=resAll.length?fmtDur(median(resAll)):'—';
+  document.getElementById('s-top').textContent=topFam?topFam[0]:'—';
+  document.getElementById('s-top-l').textContent=topFam?`most common — ${topFam[1]} of ${reqs.length}`:'top complaint';
+  buildMap(); buildLegend(); buildHours(); buildFamilies(); buildAgencies();
+  state.mode='all';state.cursor=86399;state.activeFam=new Set(FAM.map(f=>f[0]));state.hour=null;
+  document.getElementById('slider').value=86399;document.getElementById('m-all').classList.add('on');document.getElementById('m-flow').classList.remove('on');
+  syncLegend();syncHours();refresh();pReset();
+}
+
+function buildMap(){
+  layer.clearLayers();markers=[];
+  if(outlineLayer){map.removeLayer(outlineLayer);outlineLayer=null;}
+  outlineLayer=L.geoJSON({type:'Feature',geometry:precinctGeom},{style:{color:cssv('--accent'),weight:1.2,opacity:.5,fill:false,dashArray:'4 5'}}).addTo(map);
+  reqs.forEach(r=>{
+    const m=L.circleMarker([r.lat,r.lon],{radius:4.5,color:famColor[r.fam]||'#888',weight:1,fillColor:famColor[r.fam]||'#888',fillOpacity:.82,opacity:.9});
+    m.bindPopup(popup(r));m._r=r;markers.push(m);m.addTo(layer);
+  });
+  if(markers.length){const g=L.featureGroup(markers);map.fitBounds(g.getBounds().pad(0.12));}
+}
+function popup(r){
+  return `<div class="pop-ty">${r.ty}</div>${r.ds?`<div class="pop-row"><span>Detail</span><b>${r.ds}</b></div>`:''}
+    <div class="pop-row"><span>Time</span><b>${r.tm}</b></div>
+    <div class="pop-row"><span>Agency</span><b>${agencyLabel(r.ag)}</b></div>
+    <div class="pop-row"><span>Time to close</span><b>${fmtDur(r.res)}</b></div>
+    <div class="pop-row"><span>Status</span><b>${r.st||'—'}</b></div>`;
+}
+function visible(r){
+  if(!state.activeFam.has(r.fam))return null;
+  if(state.hour!==null&&r.h!==state.hour)return null;
+  if(state.mode==='flow'){if(r.s>state.cursor)return null;const age=state.cursor-r.s;if(age>WINDOW)return 0.35;return 1-(age/WINDOW)*0.62;}
+  return 0.82;
+}
+function matchesFilters(r){if(!state.activeFam.has(r.fam))return false;if(state.hour!==null&&r.h!==state.hour)return false;return true;}
+function refresh(){
+  let shown=0;
+  markers.forEach(m=>{const v=visible(m._r);if(v===null){if(map.hasLayer(m))layer.removeLayer(m);}else{if(!map.hasLayer(m))m.addTo(layer);m.setStyle({fillOpacity:v,opacity:Math.min(1,v+.1)});shown++;}});
+  const fc=reqs.filter(matchesFilters).length;
+  const em=document.getElementById('mapempty');
+  if(fc===0&&reqs.length){em.classList.add('show');document.getElementById('me-detail').textContent=describeFilters();}else em.classList.remove('show');
+  const cl=document.getElementById('clock'),sub=document.getElementById('clocksub');
+  if(state.mode==='all'&&state.hour===null)cl.textContent='All day';
+  else if(state.hour!==null)cl.textContent=String(state.hour).padStart(2,'0')+':00';
+  else{const h=Math.floor(state.cursor/3600),mm=Math.floor((state.cursor%3600)/60);cl.textContent=String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0');}
+  sub.textContent=shown+' request'+(shown===1?'':'s')+' on map';
+  const p=state.cursor/86399*100;document.getElementById('slider').style.background=`linear-gradient(90deg,var(--accent) ${p}%,#2a2340 ${p}%)`;
+}
+function describeFilters(){
+  const parts=[];const liveFams=FAM.map(f=>f[0]).filter(n=>reqs.some(r=>r.fam===n));
+  if(state.activeFam.size<liveFams.length)parts.push('Type: '+[...state.activeFam].filter(n=>liveFams.includes(n)).join(', '));
+  if(state.hour!==null)parts.push('Hour '+String(state.hour).padStart(2,'0')+':00');
+  return parts.length?('No requests this day match — '+parts.join(' + ')+'.'):'No requests to show.';
+}
+function clearFilters(){state.activeFam=new Set(FAM.map(f=>f[0]));state.hour=null;syncLegend();syncHours();setMode('all');}
+
+function buildLegend(){
+  const counts={};FAM.forEach(([n])=>counts[n]=0);reqs.forEach(r=>counts[r.fam]++);
+  const legend=document.getElementById('legend');legend.innerHTML='';
+  FAM.forEach(([n])=>{if(!counts[n])return;const el=document.createElement('div');el.className='lchip';el.dataset.fam=n;
+    el.innerHTML=`<span class="sw" style="background:${famColor[n]}"></span>${n} <span class="ct">${counts[n]}</span>`;
+    el.onclick=()=>{const all=FAM.filter(f=>counts[f[0]]).map(f=>f[0]);if(state.activeFam.has(n)){if(state.activeFam.size===all.length)state.activeFam=new Set([n]);else if(state.activeFam.size===1)state.activeFam=new Set(all);else state.activeFam.delete(n);}else state.activeFam.add(n);syncLegend();refresh();};
+    legend.appendChild(el);});
+}
+function syncLegend(){document.querySelectorAll('.lchip').forEach(el=>el.classList.toggle('off',!state.activeFam.has(el.dataset.fam)));}
+
+function buildHours(){
+  const hc=new Array(24).fill(0);reqs.forEach(r=>hc[r.h]++);const mx=Math.max(...hc,1);
+  const he=document.getElementById('hours'),hl=document.getElementById('hlabels');he.innerHTML='';hl.innerHTML='';
+  hc.forEach((n,h)=>{const b=document.createElement('div');b.className='hbar';b.dataset.h=h;b.style.height=(n/mx*100)+'%';b.innerHTML=`<span class="hv">${n}</span>`;b.title=`${String(h).padStart(2,'0')}:00 — ${n} requests`;
+    b.onclick=()=>{state.hour=state.hour===h?null:h;if(state.hour!==null)setMode('all');syncHours();refresh();document.getElementById('map').scrollIntoView({behavior:'smooth',block:'center'});};
+    he.appendChild(b);const s=document.createElement('span');s.textContent=(h%3===0)?String(h).padStart(2,'0'):'';hl.appendChild(s);});
+}
+function syncHours(){document.querySelectorAll('.hbar').forEach(b=>b.classList.toggle('sel',+b.dataset.h===state.hour));}
+
+function bars(id,arr,denom){
+  const el=document.getElementById(id);el.innerHTML='';const mx=Math.max(...arr.map(d=>d[1]),1);
+  arr.forEach(([n,v,color])=>{const row=document.createElement('div');row.className='bar-row';
+    row.innerHTML=`<div class="nm">${n}</div><div class="bar-track"><div class="bar-fill" style="width:0;background:${color}"></div></div><div class="vl">${v} · ${(v/denom*100).toFixed(0)}%</div>`;
+    if(id==='fams'){row.style.cursor='pointer';row.onclick=()=>{state.activeFam=new Set([n]);syncLegend();refresh();document.getElementById('map').scrollIntoView({behavior:'smooth',block:'center'});};}
+    el.appendChild(row);requestAnimationFrame(()=>setTimeout(()=>{row.querySelector('.bar-fill').style.width=(v/mx*100)+'%';},60));});
+}
+function buildFamilies(){
+  const counts={};FAM.forEach(([n])=>counts[n]=0);reqs.forEach(r=>counts[r.fam]++);
+  const arr=FAM.map(([n])=>[n,counts[n],famColor[n]]).filter(d=>d[1]>0).sort((a,b)=>b[1]-a[1]);
+  document.getElementById('fam-title').textContent=`${new Set(reqs.map(r=>r.ty)).size} kinds of complaint, sorted into families`;
+  bars('fams',arr,reqs.length);
+}
+function buildAgencies(){
+  const c={};reqs.forEach(r=>{const a=(r.ag||'—').toUpperCase();c[a]=(c[a]||0)+1;});
+  const arr=Object.entries(c).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([a,v])=>[agencyLabel(a),v,cssv('--accent')]);
+  bars('agencies',arr,reqs.length);
+  // median close by agency
+  const byA={};reqs.forEach(r=>{const a=(r.ag||'—').toUpperCase();(byA[a]=byA[a]||[]).push(r);});
+  const rows=Object.entries(byA).sort((a,b)=>b[1].length-a[1].length).slice(0,8).map(([a,set])=>{
+    const rr=set.filter(r=>r.res!=null).map(r=>r.res);return `<tr><td>${agencyLabel(a)}</td><td>${set.length}</td><td class="big">${rr.length?fmtDur(median(rr)):'—'}</td></tr>`;
+  }).join('');
+  document.getElementById('agencyRes').innerHTML='<tr><th>Agency</th><th>Requests</th><th>Median close</th></tr>'+rows;
+  const closed=reqs.filter(r=>r.res!=null).length;
+  document.getElementById('res-note').textContent=`${closed} of ${reqs.length} requests have a close time in the dataset. Police-handled requests often close in minutes; housing and buildings requests can take days — so read each agency on its own.`;
+}
+
+/* Live-flow controls */
+const slider=document.getElementById('slider'),playBtn=document.getElementById('play');let timer=null;
+function setMode(mode){state.mode=mode;document.getElementById('m-all').classList.toggle('on',mode==='all');document.getElementById('m-flow').classList.toggle('on',mode==='flow');if(mode==='all'){stop();state.cursor=86399;slider.value=86399;}else{state.hour=null;syncHours();}refresh();}
+document.getElementById('m-all').onclick=()=>setMode('all');
+document.getElementById('m-flow').onclick=()=>{setMode('flow');state.cursor=0;slider.value=0;refresh();};
+slider.oninput=()=>{if(state.mode==='all')setMode('flow');state.hour=null;syncHours();state.cursor=+slider.value;refresh();};
+function play(){setMode('flow');state.hour=null;syncHours();if(state.cursor>=86399)state.cursor=0;playBtn.textContent='❚❚';playBtn.classList.add('on');const c0=state.cursor,t0=Date.now();timer=setInterval(()=>{state.cursor=Math.min(c0+(Date.now()-t0)*0.9,86399);if(state.cursor>=86399){slider.value=86399;refresh();stop();return;}slider.value=state.cursor;refresh();},90);}
+function stop(){if(timer){clearInterval(timer);timer=null;}playBtn.textContent='▶';playBtn.classList.remove('on');}
+playBtn.onclick=()=>{timer?stop():play();};
+document.getElementById('me-clear').onclick=clearFilters;
+document.getElementById('aibtn').onclick=()=>document.getElementById('aipop').classList.toggle('show');
+
+/* dispatch-log player */
+const PL={cursor:0,timer:null,idx:0,speed:1.4};const FEED_CAP=80;
+function plEntry(r){const chip=`<span class="agchip">${(r.ag||'—').toUpperCase()}</span>`;const right=r.res!=null?('closed in '+fmtDur(r.res)):(r.st||'open');return `<div class="ft">${r.tm}</div><div>${r.ty}${chip}</div><div class="fr">${right}</div>`;}
+function plClock(){const h=Math.floor(PL.cursor/3600),m=Math.floor((PL.cursor%3600)/60);document.getElementById('pclock').textContent=String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');document.getElementById('pcount').textContent=PL.idx+' request'+(PL.idx===1?'':'s')+' so far';const p=PL.cursor/86399*100;document.getElementById('pslider').style.background=`linear-gradient(90deg,var(--accent) ${p}%,#2a2340 ${p}%)`;}
+function plAdvance(cur,anim){const feed=document.getElementById('feed');if(feed.querySelector('.feed-empty')&&PL.idx<reqs.length&&reqs[PL.idx].s<=cur)feed.innerHTML='';while(PL.idx<reqs.length&&reqs[PL.idx].s<=cur){const d=document.createElement('div');d.className='fentry'+(anim?' new':'');d.innerHTML=plEntry(reqs[PL.idx]);feed.prepend(d);PL.idx++;}while(feed.children.length>FEED_CAP)feed.removeChild(feed.lastChild);PL.cursor=cur;plClock();}
+function plRebuild(cur){const feed=document.getElementById('feed');feed.innerHTML='';PL.idx=0;PL.cursor=0;plAdvance(cur,false);if(!feed.children.length)feed.innerHTML='<div class="feed-empty">No requests yet by this time of day — drag further or press play.</div>';}
+function plStop(){if(PL.timer){clearInterval(PL.timer);PL.timer=null;}const b=document.getElementById('pplay');b.textContent='▶';b.classList.remove('on');}
+function plPlay(){if(PL.cursor>=86399)plRebuild(0);const b=document.getElementById('pplay');b.textContent='❚❚';b.classList.add('on');const c0=PL.cursor,t0=Date.now(),spd=PL.speed;PL.timer=setInterval(()=>{const next=Math.min(c0+(Date.now()-t0)*spd,86399);plAdvance(next,true);document.getElementById('pslider').value=next;if(next>=86399)plStop();},90);}
+function pReset(){plStop();PL.cursor=0;PL.idx=0;document.getElementById('pslider').value=0;document.getElementById('feed').innerHTML='<div class="feed-empty">Press play to start the day at midnight, or drag the slider to any hour…</div>';plClock();document.getElementById('pcount').textContent='press play';}
+document.getElementById('pplay').onclick=()=>{PL.timer?plStop():plPlay();};
+document.getElementById('pslider').oninput=e=>{plStop();plRebuild(+e.target.value);};
+document.querySelectorAll('.spdbtn').forEach(b=>b.onclick=()=>{PL.speed=+b.dataset.spd;document.querySelectorAll('.spdbtn').forEach(x=>x.classList.remove('on'));b.classList.add('on');if(PL.timer){plStop();plPlay();}});
+
+loadBtn.onclick=()=>load();
+document.getElementById('rand').onclick=()=>{const code=ALL_CODES[Math.floor(Math.random()*ALL_CODES.length)];const day=1+Math.floor(Math.random()*450);const d=new Date(2025,0,day);const mx=document.getElementById('date').max;if(mx&&d>new Date(mx))d.setTime(new Date(mx).getTime());pctSel.value=code;document.getElementById('date').value=d.toISOString().slice(0,10);load();};
+window.addEventListener('keydown',e=>{if(e.key==='Enter'&&document.activeElement.tagName!=='BUTTON')load();});
+load(true);
+</script>
+</body>
+</html>
