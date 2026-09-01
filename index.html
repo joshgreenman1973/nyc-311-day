@@ -350,7 +350,7 @@ function pointInGeom(x,y,g){if(!g)return true;if(g.type==='Polygon')return point
 
 /* map */
 const map=L.map('map',{zoomControl:true,gestureHandling:true}).setView([40.70,-73.92],11);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',subdomains:'abcd',maxZoom:19}).addTo(map);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=cb1_2r82_1_ae4e70b6166057bc41b89638',{attribution:'© OpenStreetMap © CARTO',subdomains:'abcd',maxZoom:19}).addTo(map);
 let layer=L.layerGroup().addTo(map); let markers=[]; let outlineLayer=null; let precinctGeom=null;
 let reqs=[];
 const state={mode:'all',cursor:86399,activeFam:new Set(FAM.map(f=>f[0])),hour:null};
